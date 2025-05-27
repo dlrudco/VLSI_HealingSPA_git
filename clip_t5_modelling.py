@@ -37,7 +37,7 @@ class CLIPT5Model(PreTrainedModel):
         self.image_proj = nn.Linear(vision_dim, t5_d_model)
         self.anchor_proj = nn.Linear(4, t5_d_model)
 
-        self.regression_head = nn.Linear(t5_d_model, 1)
+        self.regression_head = nn.Sequential(nn.Linear(t5_d_model, 1), nn.Tanh())  # Regression head to predict offsets
 
     def forward(
         self,
@@ -98,10 +98,9 @@ class CLIPT5Model(PreTrainedModel):
         # else:
         #     ce_loss = None
         ce_loss = None # TODO : perhaps add a cross-entropy loss for the text labels later
-
+        total_loss = None
+        pred_offsets = self.regression_head(sequence_output).squeeze(-1)  # [B, K]
         if label_coords is not None:
-            pred_offsets = self.regression_head(sequence_output).squeeze(-1)  # [B, K]
-
             regression_loss = F.mse_loss(pred_offsets, label_coords, reduction='sum') / B  # Mean Squared Error Loss
 
             if ce_loss is not None:
@@ -110,6 +109,7 @@ class CLIPT5Model(PreTrainedModel):
                 total_loss = regression_loss
         else:
             total_loss = ce_loss
+        
 
         return {
             "loss": total_loss,

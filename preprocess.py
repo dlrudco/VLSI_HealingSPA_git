@@ -12,7 +12,7 @@ import json
 clip_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
 tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
 tokenizer.pad_token = tokenizer.eos_token
-anchor_xywh = torch.tensor([0.5, 0.5, 0.2, 0.2])  # fixed anchor
+anchor_xywh = torch.tensor([0.5, 0.5, 0.5, 0.5])  # fixed anchor
 
 hico_text_prompts = json.load(open('prompts.json'))
 
@@ -48,7 +48,7 @@ def preprocess(sample):
 
     extra_label = union_xywh - anchor_xywh
 
-    interaction_str = f"What is the offset needed to capture {hico_text_prompts[hoi.item()]}, given the current anchor box : ?"
+    interaction_str = f"Locate {hico_text_prompts[hoi.item()]}, given the current anchor box :"
     output_str = "<answer>" # TODO : modify?
 
     inputs = tokenizer(interaction_str, return_tensors="pt", padding="longest", truncation=True)

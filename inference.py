@@ -64,7 +64,6 @@ class ToTensor:
 clip_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14")
 tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-large")
 tokenizer.pad_token = tokenizer.eos_token
-anchor_xywh = torch.tensor([0.5, 0.5, 0.2, 0.2])
 
 @torch.no_grad()
 def generate_offsets(model, image, text, anchor_xywh, tokenizer, clip_processor, device="cuda"):
@@ -119,14 +118,14 @@ def offset_to_box(offset, anchor_xywh=[0.5, 0.5, 0.2, 0.2], img_size=(224, 224))
     return [int(x1 * W), int(y1 * H), int(x2 * W), int(y2 * H)]
 
 
-def get_gt_union_box(box_h, box_o, img_size):
+def get_gt_union_box(box_h, box_o):
     # box_h, box_o: xyxy in normalized coordinates
     x1 = min(box_h[0], box_o[0])
     y1 = min(box_h[1], box_o[1])
     x2 = max(box_h[2], box_o[2])
     y2 = max(box_h[3], box_o[3])
-    W, H = img_size
-    return [int(x1 * W), int(y1 * H), int(x2 * W), int(y2 * H)]
+    
+    return [int(x1), int(y1), int(x2), int(y2)]
 
 def visualize_boxes_with_gt(image, anchor_box, pred_box, gt_box, title=""):
     fig, ax = plt.subplots(1)
@@ -159,7 +158,7 @@ def visualize_boxes_with_gt(image, anchor_box, pred_box, gt_box, title=""):
     ax.legend()
     plt.title(title)
     plt.axis('off')
-    plt.show()
+    plt.savefig("visualization.png", bbox_inches='tight')
 
 
 def main(args):
@@ -179,26 +178,27 @@ def main(args):
                 anno_file=os.path.join('hicodet', f"instances_test2015.json"),
                 target_transform=ToTensor(input_format='dict')
             )
-    image, target = test_hicodet.__getitem__(0)
+    image, target = test_hicodet.__getitem__(30)
     n_hois = len(target["hoi"])
     idx = 0
 
     hoi = target["hoi"][idx]  
     box_h = target["boxes_h"][idx]  
     box_o = target["boxes_o"][idx]  
-    interaction_str = f"What is the offset needed to capture {hico_text_prompts[hoi.item()]}, given the current anchor box : ?"
-    breakpoint()
-    offset = generate_offsets(
-        model=model,
-        image=image,
-        text=text,
-        anchor_xywh=anchor_xywh,
-        tokenizer=tokenizer,
-        clip_processor=clip_processor,
-        device="cuda"
-    )
+    interaction_str = f"Locate {hico_text_prompts[hoi.item()]}, given the current anchor box : ?"
+    anchor_xywh = torch.tensor([0.5, 0.5, 0.2, 0.2])
+    
+    with torch.no_grad():
+        offset = generate_offsets(
+            model=model,
+            image=image,
+            text=interaction_str,
+            anchor_xywh=anchor_xywh,
+            tokenizer=tokenizer,
+            clip_processor=clip_processor,
+            device="cuda"
+        )
 
-    anchor_xywh = [0.5, 0.5, 0.2, 0.2]
     img_size = image.size
 
     # --- 예측된 union box (green)
@@ -209,16 +209,12 @@ def main(args):
 
     # --- GT union box 계산 (blue)
     # HICODet target dict에서 하나 예시로 꺼낸다고 가정
-    target = {
-        "boxes_h": [[0.3, 0.4, 0.6, 0.8]],  # normalized
-        "boxes_o": [[0.4, 0.5, 0.7, 0.9]]   # normalized
-    }
-    idx = 0  # 첫 번째 HOI 선택
-    gt_box = get_gt_union_box(target["boxes_h"][idx], target["boxes_o"][idx], img_size)
+
+    gt_box = get_gt_union_box(box_h, box_o)
 
     # --- 시각화
     visualize_boxes_with_gt(image, anchor_box, pred_box, gt_box, title="Anchor vs Predicted vs GT")
-        
+    breakpoint()
     
 if __name__ == "__main__":
     import argparse

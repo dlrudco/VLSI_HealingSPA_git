@@ -99,7 +99,7 @@ def main():
     trainer.train()
 
     print("Saving model...")
-    trainer.save_model("./checkpoints/clip-flant5-final")
+    trainer.save_model("./checkpoints/clip-flant5_tanh-final")
 
 if __name__ == "__main__":
     main()
