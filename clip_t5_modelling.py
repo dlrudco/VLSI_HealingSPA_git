@@ -19,14 +19,33 @@ class CLIPT5Config(PretrainedConfig):
         self.language_model_name = language_model_name
         self.image_proj_dim = image_proj_dim
 
+class LogAbsLoss(nn.Module):
+    def __init__(self, eps=1e-6, reduction='mean', beta=3.0):
+        super().__init__()
+        self.eps = eps
+        self.reduction = reduction
+        self.beta = beta
+
+    def forward(self, pred, target):
+        error = torch.abs(pred - target)
+        log_term = torch.log1p(self.beta*error + self.eps)  # log1p(x) = log(1 + x)
+        if self.reduction == 'mean':
+            return torch.mean(log_term)
+        elif self.reduction == 'sum':
+            return torch.sum(log_term)
+        else:
+            return log_term
+
 
 class CLIPT5Model(PreTrainedModel):
     config_class = CLIPT5Config  # 별도로 정의한 config class
 
-    def __init__(self, config, apply_lora=False):
+    def __init__(self, config, tokenizer, apply_lora=False):
         super().__init__(config)
         self.vision_encoder = CLIPVisionModel.from_pretrained(config.vision_model_name)
         self.vision_encoder.requires_grad_(False)
+        self.tokenizer = tokenizer
+        self.special_tokens = None
         vision_dim = self.vision_encoder.config.hidden_size  # 1024 for CLIP-L/14
         if apply_lora:
             self.language_model = load_lora_t5_model(config.language_model_name)
@@ -37,8 +56,10 @@ class CLIPT5Model(PreTrainedModel):
         self.image_proj = nn.Linear(vision_dim, t5_d_model)
         self.anchor_proj = nn.Linear(4, t5_d_model)
 
-        self.regression_head = nn.Sequential(nn.Linear(t5_d_model, 1), nn.Tanh())  # Regression head to predict offsets
+        # self.offset_token_embeddings = nn.Embedding(4, t5_d_model)  # For the anchor token
 
+        self.regression_head = nn.Sequential(nn.Linear(t5_d_model, 1), nn.Tanh())  # Regression head to predict offsets
+        self.loss_func = LogAbsLoss(reduction='sum')  # Logarithmic absolute loss for regression
     def forward(
         self,
         pixel_values=None,
@@ -74,11 +95,15 @@ class CLIPT5Model(PreTrainedModel):
         B = fused_inputs.size(0)
         K = label_coords.shape[-1] if label_coords is not None else 4
         
-        start_token_id = self.language_model.config.decoder_start_token_id or self.language_model.config.pad_token_id
-        decoder_input_ids = torch.full((B, K), start_token_id, dtype=torch.long).to(fused_inputs.device)
-        decoder_inputs_embeds = self.language_model.decoder.embed_tokens(decoder_input_ids)
-
+        # start_token_id = self.language_model.config.decoder_start_token_id or self.language_model.config.pad_token_id
+        # decoder_input_ids = torch.full((B, K), start_token_id, dtype=torch.long).to(fused_inputs.device)
+        # decoder_inputs_embeds = self.language_model.decoder.embed_tokens(decoder_input_ids)
+        # decoder_inputs_embeds = self.offset_token_embeddings(torch.arange(K, device=fused_inputs.device)).unsqueeze(0).repeat(B,1,1)  # [K, d_model]
         # Step 6. Decoder
+        special_tokens = ["<extra_id_0>", "<extra_id_1>", "<extra_id_2>", "<extra_id_3>"]
+        token_ids = self.tokenizer.convert_tokens_to_ids(special_tokens)
+        decoder_input_ids = torch.tensor(token_ids).unsqueeze(0).repeat(B, 1).to(fused_inputs.device)  # [B, K]
+        decoder_inputs_embeds = self.language_model.decoder.embed_tokens(decoder_input_ids)
         decoder_outputs = self.language_model.decoder(
             inputs_embeds=decoder_inputs_embeds,
             attention_mask=decoder_attention_mask,
@@ -101,8 +126,8 @@ class CLIPT5Model(PreTrainedModel):
         total_loss = None
         pred_offsets = self.regression_head(sequence_output).squeeze(-1)  # [B, K]
         if label_coords is not None:
-            regression_loss = F.mse_loss(pred_offsets, label_coords, reduction='sum') / B  # Mean Squared Error Loss
-
+            # regression_loss = F.l1_loss(pred_offsets, label_coords, reduction='sum') / B  # Mean Squared Error Loss
+            regression_loss = self.loss_func(pred_offsets, label_coords) / B  # Logarithmic absolute loss
             if ce_loss is not None:
                 total_loss = ce_loss + regression_loss
             else:
@@ -136,8 +161,8 @@ def load_lora_t5_model(model_name: str):
     base_model = prepare_model_for_kbit_training(base_model)
 
     lora_config = LoraConfig(
-        r=32,
-        lora_alpha=64,
+        r=128,
+        lora_alpha=256,
         lora_dropout=0.05,
         bias="none",
         task_type="SEQ_2_SEQ_LM",

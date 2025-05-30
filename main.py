@@ -3,7 +3,7 @@ import torch
 import torchvision
 from datasets import Dataset
 from transformers import Trainer, TrainingArguments
-from preprocess import preprocess, vlm_data_collator
+from preprocess import preprocess, vlm_data_collator, tokenizer
 from clip_t5_modelling import CLIPT5Config, CLIPT5Model
 from dataset import HICODet, HICODetVLMDataset
 
@@ -59,32 +59,33 @@ def main():
         vision_model_name="openai/clip-vit-large-patch14",
         language_model_name="google/flan-t5-large"
     )
-    model = CLIPT5Model(config, apply_lora=True)
+    model = CLIPT5Model(config, tokenizer, apply_lora=True)
 
     model.to("cuda" if torch.cuda.is_available() else "cpu")
 
     train_hicodet = HICODet(
                 root=os.path.join('hicodet', "hico_20160224_det/images", 'train2015'),
-                anno_file=os.path.join('hicodet', f"instances_train2015.json"),
+                anno_file=os.path.join('hicodet', f"instances_train2015_curated.json"),
                 target_transform=ToTensor(input_format='dict')
             )
     dataset = HICODetVLMDataset(train_hicodet, preprocess)
 
     training_args = TrainingArguments(
-        output_dir="./checkpoints/clip-flant5",
+        output_dir="./checkpoints/clip-flant5_curated_tanh_nocrop_logloss",
         per_device_train_batch_size=32,
         dataloader_num_workers=8,
         gradient_accumulation_steps=1,
         learning_rate=5e-5,
-        num_train_epochs=5,
-        weight_decay=5e-5,
+        num_train_epochs=30,
+        weight_decay=5e-4,
         logging_dir="./logs",
         logging_steps=10,
         save_steps=1000,
-        save_total_limit=2,
+        save_total_limit=5,
         remove_unused_columns=False,
         fp16=False,
-        report_to="none"
+        report_to="wandb",
+        run_name="clip-flant5_curated_tanh_nocrop_logloss",
     )
 
     trainer = Trainer(
@@ -99,7 +100,7 @@ def main():
     trainer.train()
 
     print("Saving model...")
-    trainer.save_model("./checkpoints/clip-flant5_tanh-final")
+    trainer.save_model("./checkpoints/clip-flant5_curated_tanh_nocrop_logloss")
 
 if __name__ == "__main__":
     main()

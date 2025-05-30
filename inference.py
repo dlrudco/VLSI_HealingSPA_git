@@ -10,7 +10,7 @@ import matplotlib.patches as patches
 from transformers import CLIPImageProcessor
 from transformers import AutoTokenizer
 from dataset import HICODet, HICODetVLMDataset
-from preprocess import preprocess
+from preprocess import preprocess, tokenizer
 
 hico_text_prompts = json.load(open('prompts.json'))
 
@@ -101,7 +101,7 @@ def generate_offsets(model, image, text, anchor_xywh, tokenizer, clip_processor,
 
 
 
-def offset_to_box(offset, anchor_xywh=[0.5, 0.5, 0.2, 0.2], img_size=(224, 224)):
+def offset_to_box(offset, anchor_xywh=[0.5, 0.5, 0.4, 0.4], img_size=(224, 224)):
     # anchor + offset = predicted union box (normalized xywh)
     anchor = torch.tensor(anchor_xywh)
     pred = anchor + offset
@@ -166,7 +166,7 @@ def main(args):
         vision_model_name="openai/clip-vit-large-patch14",
         language_model_name="google/flan-t5-large"
     )
-    model = CLIPT5Model(config, apply_lora=True)
+    model = CLIPT5Model(config, tokenizer, apply_lora=True)
     
     checkpoint = load_file(args.checkpoint, device="cpu")
     model.load_state_dict(checkpoint, strict=False)
@@ -174,47 +174,56 @@ def main(args):
     model.eval()
 
     test_hicodet = HICODet(
-                root=os.path.join('hicodet', "hico_20160224_det/images", 'test2015'),
-                anno_file=os.path.join('hicodet', f"instances_test2015.json"),
+                root=os.path.join('hicodet', "hico_20160224_det/images", 'train2015'),
+                anno_file=os.path.join('hicodet', f"instances_train2015_curated.json"),
                 target_transform=ToTensor(input_format='dict')
             )
-    image, target = test_hicodet.__getitem__(30)
-    n_hois = len(target["hoi"])
-    idx = 0
+    for iidx in range(len(test_hicodet)):
+        image, target = test_hicodet.__getitem__(iidx)
+        n_hois = len(target["hoi"])
+        # for idx in range(n_hois):
+        idx = 0
 
-    hoi = target["hoi"][idx]  
-    box_h = target["boxes_h"][idx]  
-    box_o = target["boxes_o"][idx]  
-    interaction_str = f"Locate {hico_text_prompts[hoi.item()]}, given the current anchor box : ?"
-    anchor_xywh = torch.tensor([0.5, 0.5, 0.2, 0.2])
-    
-    with torch.no_grad():
-        offset = generate_offsets(
-            model=model,
-            image=image,
-            text=interaction_str,
-            anchor_xywh=anchor_xywh,
-            tokenizer=tokenizer,
-            clip_processor=clip_processor,
-            device="cuda"
-        )
+        hoi = target["hoi"][idx]  
+        box_h = target["boxes_h"][idx]  
+        box_o = target["boxes_o"][idx]  
+        interaction_str = f"Locate {hico_text_prompts[hoi.item()]}, given the current anchor box : ?"
+        anchor_xywh = torch.tensor([0.5, 0.5, 0.5, 0.5])
+        
+        with torch.no_grad():
+            # cum_offset = torch.zeros(4, dtype=torch.float32)
+            # new_anchor_xywh = anchor_xywh.clone()
+            # for i in range(10):
+            offset = generate_offsets(
+                model=model,
+                image=image,
+                text=interaction_str,
+                anchor_xywh=anchor_xywh,
+                tokenizer=tokenizer,
+                clip_processor=clip_processor,
+                device="cuda"
+            )
+                # new_anchor_xywh = new_anchor_xywh + offset / 10
+                # cum_offset += offset / 10
+                # print(f"Predicted offset: {offset.numpy()}")
+        print(interaction_str)
+        # offset = cum_offset
+        img_size = image.size
 
-    img_size = image.size
+        # --- 예측된 union box (green)
+        pred_box = offset_to_box(offset, anchor_xywh, img_size)
 
-    # --- 예측된 union box (green)
-    pred_box = offset_to_box(offset, anchor_xywh, img_size)
+        # --- anchor box (red)
+        anchor_box = offset_to_box(torch.zeros(4), anchor_xywh, img_size)
 
-    # --- anchor box (red)
-    anchor_box = offset_to_box(torch.zeros(4), anchor_xywh, img_size)
+        # --- GT union box 계산 (blue)
+        # HICODet target dict에서 하나 예시로 꺼낸다고 가정
 
-    # --- GT union box 계산 (blue)
-    # HICODet target dict에서 하나 예시로 꺼낸다고 가정
+        gt_box = get_gt_union_box(box_h, box_o)
 
-    gt_box = get_gt_union_box(box_h, box_o)
-
-    # --- 시각화
-    visualize_boxes_with_gt(image, anchor_box, pred_box, gt_box, title="Anchor vs Predicted vs GT")
-    breakpoint()
+        # --- 시각화
+        visualize_boxes_with_gt(image, anchor_box, pred_box, gt_box, title="Anchor vs Predicted vs GT")
+        breakpoint()
     
 if __name__ == "__main__":
     import argparse
