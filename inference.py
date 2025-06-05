@@ -99,8 +99,6 @@ def generate_offsets(model, image, text, anchor_xywh, tokenizer, clip_processor,
     # 5. 회귀값 반환
     return outputs["regression_output"].squeeze(0).cpu()  # [K]
 
-
-
 def offset_to_box(offset, anchor_xywh=[0.5, 0.5, 0.4, 0.4], img_size=(224, 224)):
     # anchor + offset = predicted union box (normalized xywh)
     anchor = torch.tensor(anchor_xywh)
@@ -117,7 +115,6 @@ def offset_to_box(offset, anchor_xywh=[0.5, 0.5, 0.4, 0.4], img_size=(224, 224))
     W, H = img_size
     return [int(x1 * W), int(y1 * H), int(x2 * W), int(y2 * H)]
 
-
 def get_gt_union_box(box_h, box_o):
     # box_h, box_o: xyxy in normalized coordinates
     x1 = min(box_h[0], box_o[0])
@@ -127,7 +124,7 @@ def get_gt_union_box(box_h, box_o):
     
     return [int(x1), int(y1), int(x2), int(y2)]
 
-def visualize_boxes_with_gt(image, anchor_box, pred_box, gt_box, title=""):
+def visualize_boxes_with_gt(image, anchor_box, pred_box, gt_box, title="", pred_box_list=None):
     fig, ax = plt.subplots(1)
     ax.imshow(image)
 
@@ -139,21 +136,33 @@ def visualize_boxes_with_gt(image, anchor_box, pred_box, gt_box, title=""):
         linewidth=2, edgecolor='r', facecolor='none', label='Anchor'
     ))
 
-    # predicted box (green)
-    ax.add_patch(patches.Rectangle(
-        (pred_box[0], pred_box[1]),
-        pred_box[2] - pred_box[0],
-        pred_box[3] - pred_box[1],
-        linewidth=2, edgecolor='g', facecolor='none', label='Predicted'
-    ))
+    # # predicted box (green)
+    # ax.add_patch(patches.Rectangle(
+    #     (pred_box[0], pred_box[1]),
+    #     pred_box[2] - pred_box[0],
+    #     pred_box[3] - pred_box[1],
+    #     linewidth=2, edgecolor='g', facecolor='none', label='Predicted'
+    # ))
 
     # GT union box (blue)
-    ax.add_patch(patches.Rectangle(
-        (gt_box[0], gt_box[1]),
-        gt_box[2] - gt_box[0],
-        gt_box[3] - gt_box[1],
-        linewidth=2, edgecolor='b', facecolor='none', label='GT Union'
-    ))
+    # ax.add_patch(patches.Rectangle(
+    #     (gt_box[0], gt_box[1]),
+    #     gt_box[2] - gt_box[0],
+    #     gt_box[3] - gt_box[1],
+    #     linewidth=2, edgecolor='b', facecolor='none', label='GT Union'
+    # ))
+
+    # colormap for predicted boxes (JET)
+    if pred_box_list is not None:
+        for i, box in enumerate(pred_box_list):
+            color = plt.cm.jet(i / len(pred_box_list))
+            ax.add_patch(patches.Rectangle(
+                (box[0], box[1]),
+                box[2] - box[0],
+                box[3] - box[1],
+                linewidth=2, edgecolor=color, facecolor='none', label=f'Predicted {i+1}'
+            ))
+
 
     ax.legend()
     plt.title(title)
@@ -174,8 +183,8 @@ def main(args):
     model.eval()
 
     test_hicodet = HICODet(
-                root=os.path.join('hicodet', "hico_20160224_det/images", 'train2015'),
-                anno_file=os.path.join('hicodet', f"instances_train2015_curated.json"),
+                root=os.path.join('hicodet', "hico_20160224_det/images", 'test2015'),
+                anno_file=os.path.join('hicodet', f"instances_test2015_curated.json"),
                 target_transform=ToTensor(input_format='dict')
             )
     for iidx in range(len(test_hicodet)):
@@ -187,31 +196,37 @@ def main(args):
         hoi = target["hoi"][idx]  
         box_h = target["boxes_h"][idx]  
         box_o = target["boxes_o"][idx]  
-        interaction_str = f"Locate {hico_text_prompts[hoi.item()]}, given the current anchor box : ?"
+        interaction_str = f"Locate a person in {hico_text_prompts[hoi.item()]}"
         anchor_xywh = torch.tensor([0.5, 0.5, 0.5, 0.5])
-        
+        offset_list = []
         with torch.no_grad():
-            # cum_offset = torch.zeros(4, dtype=torch.float32)
-            # new_anchor_xywh = anchor_xywh.clone()
-            # for i in range(10):
-            offset = generate_offsets(
-                model=model,
-                image=image,
-                text=interaction_str,
-                anchor_xywh=anchor_xywh,
-                tokenizer=tokenizer,
-                clip_processor=clip_processor,
-                device="cuda"
-            )
-                # new_anchor_xywh = new_anchor_xywh + offset / 10
-                # cum_offset += offset / 10
-                # print(f"Predicted offset: {offset.numpy()}")
+            cum_offset = torch.zeros(4, dtype=torch.float32)
+            new_anchor_xywh = anchor_xywh.clone()
+            for i in range(3):
+                offset = generate_offsets(
+                    model=model,
+                    image=image,
+                    text=interaction_str,
+                    anchor_xywh=new_anchor_xywh,
+                    tokenizer=tokenizer,
+                    clip_processor=clip_processor,
+                    device="cuda"
+                )
+                offset_list.append(offset)
+                new_anchor_xywh = new_anchor_xywh + offset
+                cum_offset += offset
+                print(f"Predicted offset: {offset.numpy()}")
         print(interaction_str)
-        # offset = cum_offset
+        offset = cum_offset
         img_size = image.size
 
         # --- 예측된 union box (green)
+        pred_box_list = []
         pred_box = offset_to_box(offset, anchor_xywh, img_size)
+        off_anch = anchor_xywh
+        for off in offset_list:
+            pred_box_list.append(offset_to_box(off, off_anch, img_size))
+            off_anch = off_anch + off
 
         # --- anchor box (red)
         anchor_box = offset_to_box(torch.zeros(4), anchor_xywh, img_size)
@@ -219,10 +234,10 @@ def main(args):
         # --- GT union box 계산 (blue)
         # HICODet target dict에서 하나 예시로 꺼낸다고 가정
 
-        gt_box = get_gt_union_box(box_h, box_o)
+        gt_box = get_gt_union_box(box_h, box_h)
 
         # --- 시각화
-        visualize_boxes_with_gt(image, anchor_box, pred_box, gt_box, title="Anchor vs Predicted vs GT")
+        visualize_boxes_with_gt(image, anchor_box, pred_box, gt_box, title=interaction_str, pred_box_list=pred_box_list)
         breakpoint()
     
 if __name__ == "__main__":

@@ -35,14 +35,7 @@ def get_union_box(box1, box2, size):
 
 def preprocess(sample):
     # random anchor version
-    anchor_xywh = torch.tensor([0.5, 0.5, 0.5, 0.5])
-    if random.random() < 0.2:
-        rand_xys = torch.rand(2) * 0.5 + 0.25  # [0.25, 0.75]
-        rand_whs = torch.rand(2) * 0.5 + 0.25  # [0.25, 0.75]
-        anchor_xywh[0] = rand_xys[0]  # cx
-        anchor_xywh[1] = rand_xys[1]  # cy
-        anchor_xywh[2] = rand_whs[0]  # w
-        anchor_xywh[3] = rand_whs[1]  # h
+    
     image, target = sample
 
     pixel_values = clip_processor(images=image, return_tensors="pt")["pixel_values"].squeeze(0)
@@ -54,16 +47,33 @@ def preprocess(sample):
     box_h = target["boxes_h"][idx]  
     box_o = target["boxes_o"][idx]  
 
-    union_xyxy = get_union_box(box_h, box_o, image.size)
+    # union_xyxy = get_union_box(box_h, box_o, image.size)
+    union_xyxy = get_union_box(box_h, box_h, image.size) # use human box as union box
     union_xywh = torch.tensor(xyxy_to_xywh(union_xyxy))
 
-    delta = union_xywh - anchor_xywh
-    random_t = random.uniform(0, 1)
-    new_anchor_xywh = anchor_xywh + delta * random_t
-    extra_label = (1 - random_t) * delta
-    # extra_label = union_xywh - anchor_xywh
+    # delta = union_xywh - anchor_xywh
+    # random_t = random.uniform(0, 1)
+    # new_anchor_xywh = anchor_xywh + delta * random_t
+    # extra_label = (1 - random_t) * delta
+    # # extra_label = union_xywh - 
+    anchor_xywh = torch.tensor([0.5, 0.5, 0.5, 0.5])
+    if random.random() < 0.2:
+        rand_xys = torch.rand(2) * 0.5 + 0.25  # [0.25, 0.75]
+        rand_whs = torch.rand(2) * 0.5 + 0.25  # [0.25, 0.75]
+        anchor_xywh[0] = rand_xys[0]  # cx
+        anchor_xywh[1] = rand_xys[1]  # cy
+        anchor_xywh[2] = rand_whs[0]  # w
+        anchor_xywh[3] = rand_whs[1]  # h
+    elif random.random() < 0.5:
+        # anchor near the label box
+        anchor_xywh[0] = union_xywh[0] + random.uniform(-0.1, 0.1) * union_xywh[2]  # cx
+        anchor_xywh[1] = union_xywh[1] + random.uniform(-0.1, 0.1) * union_xywh[3]  # cy
+        anchor_xywh[2] = union_xywh[2] * random.uniform(0.8, 1.2)  # w
+        anchor_xywh[3] = union_xywh[3] * random.uniform(0.8, 1.2)  # h
+    else:
+        pass
 
-    interaction_str = f"Locate {hico_text_prompts[hoi.item()]}, given the current anchor box :"
+    interaction_str = f"Locate a person in {hico_text_prompts[hoi.item()]}"
     output_str = "<answer>" # TODO : modify?
 
     inputs = tokenizer(interaction_str, return_tensors="pt", padding="longest", truncation=True)
@@ -73,10 +83,10 @@ def preprocess(sample):
     return {
         "pixel_values": pixel_values,                      # [3, 224, 224]
         "input_ids": inputs["input_ids"].squeeze(0),       # [L]
-        "current_anchor" : new_anchor_xywh,
+        "current_anchor" : anchor_xywh,
         "attention_mask": inputs["attention_mask"].squeeze(0),
         "label_texts": labels,                                  # [L]
-        "label_coords": extra_label                        # [4]
+        "label_coords": union_xywh                        # [4]
     }
 
 

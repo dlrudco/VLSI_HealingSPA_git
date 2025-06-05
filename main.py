@@ -6,6 +6,7 @@ from transformers import Trainer, TrainingArguments
 from preprocess import preprocess, vlm_data_collator, tokenizer
 from clip_t5_modelling import CLIPT5Config, CLIPT5Model
 from dataset import HICODet, HICODetVLMDataset
+from safetensors.torch import load_file
 
 def _to_list_of_tensor(x, dtype=None, device=None):
     return [torch.as_tensor(item, dtype=dtype, device=device) for item in x]
@@ -54,13 +55,18 @@ class ToTensor:
         reprstr += ')'
         return reprstr
     
-def main():
+def main(args):
     config = CLIPT5Config(
         vision_model_name="openai/clip-vit-large-patch14",
         language_model_name="google/flan-t5-large"
     )
     model = CLIPT5Model(config, tokenizer, apply_lora=True)
-
+    if args.checkpoint:
+        print(f"Loading model from checkpoint: {args.checkpoint}")
+        state_dict = load_file(args.checkpoint, device="cpu")
+        model.load_state_dict(state_dict, strict=False)
+    else:
+        print("No checkpoint provided, initializing model from scratch.")
     model.to("cuda" if torch.cuda.is_available() else "cpu")
 
     train_hicodet = HICODet(
@@ -71,12 +77,12 @@ def main():
     dataset = HICODetVLMDataset(train_hicodet, preprocess)
 
     training_args = TrainingArguments(
-        output_dir="./checkpoints/clip-flant5_curated_tanh_nocrop_logloss",
-        per_device_train_batch_size=32,
+        output_dir=f"./checkpoints/{args.exp_name}",
+        per_device_train_batch_size=16,
         dataloader_num_workers=8,
-        gradient_accumulation_steps=1,
+        gradient_accumulation_steps=4,
         learning_rate=5e-5,
-        num_train_epochs=30,
+        num_train_epochs=20,
         weight_decay=5e-4,
         logging_dir="./logs",
         logging_steps=10,
@@ -85,7 +91,7 @@ def main():
         remove_unused_columns=False,
         fp16=False,
         report_to="wandb",
-        run_name="clip-flant5_curated_tanh_nocrop_logloss",
+        run_name=args.exp_name,
     )
 
     trainer = Trainer(
@@ -100,7 +106,20 @@ def main():
     trainer.train()
 
     print("Saving model...")
-    trainer.save_model("./checkpoints/clip-flant5_curated_tanh_nocrop_logloss")
+    trainer.save_model(f"./checkpoints/{args.exp_name}")
+
+def make_random_exp_name():
+    import random
+    import string
+    random_name = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+    return f"exp_{random_name}"
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description="Train CLIP-T5 model on HICO-DET dataset")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Path to the model checkpoint")
+    parser.add_argument("--exp_name", type=str, default="", help="Experiment name for logging")
+    args = parser.parse_args()
+    if args.exp_name == "":
+        args.exp_name = make_random_exp_name()
+    main(args)
