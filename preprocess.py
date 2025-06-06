@@ -46,6 +46,10 @@ def preprocess(sample):
     hoi = target["hoi"][idx]  
     box_h = target["boxes_h"][idx]  
     box_o = target["boxes_o"][idx]  
+    if "context-llava" in target:
+        context = target["context-llava"][idx]
+    else:
+        context = ""
 
     # union_xyxy = get_union_box(box_h, box_o, image.size)
     union_xyxy = get_union_box(box_h, box_h, image.size) # use human box as union box
@@ -75,7 +79,9 @@ def preprocess(sample):
 
     interaction_str = f"Locate a person in {hico_text_prompts[hoi.item()]}"
     output_str = "<answer>" # TODO : modify?
-
+    if context != "":
+        interaction_str += f". To be specific, {context.lower()}"
+    # breakpoint()
     inputs = tokenizer(interaction_str, return_tensors="pt", padding="longest", truncation=True)
     labels = tokenizer(output_str, return_tensors="pt", padding="longest", truncation=True)["input_ids"].squeeze(0)
     labels[labels == tokenizer.pad_token_id] = -100

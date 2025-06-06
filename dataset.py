@@ -330,11 +330,17 @@ class HICODet(ImageDataset):
         intra_idx = self._idx[i]
 
         # for debugging
+        if 'context-llava' in self._anno[intra_idx]:
+            context = self._anno[intra_idx].pop('context-llava')
+        else:
+            context = None
         image, target = self._transforms(
             self.load_image(os.path.join(self._root, self._filenames[intra_idx])), 
             self._anno[intra_idx]
             )
         target['filename'] = self._filenames[intra_idx]
+        if context is not None:
+            target['context-llava'] = context
 
         return image, target
 

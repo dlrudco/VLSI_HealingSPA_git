@@ -71,7 +71,7 @@ def main(args):
 
     train_hicodet = HICODet(
                 root=os.path.join('hicodet', "hico_20160224_det/images", 'train2015'),
-                anno_file=os.path.join('hicodet', f"instances_train2015_curated.json"),
+                anno_file=os.path.join('hicodet', f"instances_train2015_curated_with_context.json"),
                 target_transform=ToTensor(input_format='dict')
             )
     dataset = HICODetVLMDataset(train_hicodet, preprocess)
@@ -80,9 +80,9 @@ def main(args):
         output_dir=f"./checkpoints/{args.exp_name}",
         per_device_train_batch_size=16,
         dataloader_num_workers=8,
-        gradient_accumulation_steps=4,
+        gradient_accumulation_steps=8,
         learning_rate=5e-5,
-        num_train_epochs=20,
+        num_train_epochs=30,
         weight_decay=5e-4,
         logging_dir="./logs",
         logging_steps=10,
