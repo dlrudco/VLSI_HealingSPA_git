@@ -334,6 +334,11 @@ class HICODet(ImageDataset):
             context = self._anno[intra_idx].pop('context-llava')
         else:
             context = None
+        
+        if 'human_attrib' in self._anno[intra_idx]:
+            attrib = self._anno[intra_idx].pop('human_attrib')
+        else:
+            attrib = None
         image, target = self._transforms(
             self.load_image(os.path.join(self._root, self._filenames[intra_idx])), 
             self._anno[intra_idx]
@@ -341,6 +346,8 @@ class HICODet(ImageDataset):
         target['filename'] = self._filenames[intra_idx]
         if context is not None:
             target['context-llava'] = context
+        if attrib is not None:
+            target['human_attrib'] = attrib
 
         return image, target
 

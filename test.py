@@ -113,7 +113,7 @@ if __name__ == "__main__":
 
     test_dataset = HICODet(
         root="hicodet/hico_20160224_det/images/test2015",
-        anno_file="hicodet/instances_test2015_curated.json"
+        anno_file="hicodet/instances_test2015_merged.json"
     )
 
     avg_mse, accuracy = evaluate_clip_t5(model, test_dataset, hico_prompts, tokenizer, clip_processor, device=device)

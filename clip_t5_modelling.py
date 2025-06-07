@@ -51,13 +51,14 @@ import random
 class CLIPT5Model(PreTrainedModel):
     config_class = CLIPT5Config  # 별도로 정의한 config class
 
-    def __init__(self, config, tokenizer, apply_lora=False, iteration=3):
+    def __init__(self, config, tokenizer, apply_lora=False, iteration=3, args=None):
         super().__init__(config)
         self.iteration = iteration
         self.vision_encoder = CLIPVisionModel.from_pretrained(config.vision_model_name)
         self.vision_encoder.requires_grad_(False)
         self.tokenizer = tokenizer
         self.special_tokens = None
+        self.args = args
         vision_dim = self.vision_encoder.config.hidden_size  # 1024 for CLIP-L/14
         if apply_lora:
             self.language_model = load_lora_t5_model(config.language_model_name)
@@ -106,6 +107,8 @@ class CLIPT5Model(PreTrainedModel):
         with torch.no_grad():
             vision_outputs = self.vision_encoder(pixel_values=pixel_values)
             vision_embeds = vision_outputs.last_hidden_state  # [B, 257, 1024]
+            if self.args.run_type == 'baseline':
+                vision_embeds = vision_embeds[:, 0, :].unsqueeze(1)  # only use the CLS token
         projected_image_embeds = self.image_proj(vision_embeds)  # [B, 257, d_model]
         projected_image_embeds = projected_image_embeds + \
             self.position_proj(self.image_positional_embedding.unsqueeze(0).to(projected_image_embeds.device))  # [B, 257, d_model]
@@ -113,50 +116,44 @@ class CLIPT5Model(PreTrainedModel):
         
         ce_loss = None # TODO : perhaps add a cross-entropy loss for the text labels later
         total_loss = 0.
-        patch_anchor = current_anchor
-        # cur_iteration = self.iteration if self.training else 1
-        # for _ in range(cur_iteration):
-        self.anchor_position_embeds = self.anchor_position_embeds.to(projected_image_embeds.device)
-        patch_anchor = (patch_anchor * 223).round().long().clamp(0, 223).to(projected_image_embeds.device)  # Convert to pixel coordinates in the range [0, 223], (B, 4)
-        patch_anchor = self.anchor_position_embeds[patch_anchor].to(projected_image_embeds.device)  # [B, 4, d_model]
-        projected_anchor_embeds = self.anchor_proj(patch_anchor)  # [B, 4, d_model]
-        anchor_attention_mask = torch.ones(projected_anchor_embeds.shape[:2], dtype=torch.long).to(projected_anchor_embeds.device)
-        
-        with torch.no_grad():
-            visual_patch = []
-            xy_patch = xywh_to_xyxy(current_anchor)  # Convert from xywh to xyxy
-            for bidx in range(projected_image_embeds.size(0)):
-                patch_x1 = int(max(0., xy_patch[bidx, 0] * pixel_values.size(3)))
-                patch_x2 = int(min(pixel_values.size(3), max(xy_patch[bidx, 2] * pixel_values.size(3),patch_x1+1)))
-                patch_y1 = int(max(0., xy_patch[bidx, 1] * pixel_values.size(2)))
-                patch_y2 = int(min(pixel_values.size(2), max(xy_patch[bidx, 3] * pixel_values.size(2),patch_y1+1)))
-                patch_chunk = pixel_values[bidx, :,
-                    patch_y1:patch_y2, patch_x1:patch_x2]
-                resized_patch = F.interpolate(
-                    patch_chunk.unsqueeze(0), size=(224, 224), mode='bilinear', align_corners=False
-                )
-                visual_patch.append(resized_patch.squeeze(0))
-            # for debug, save the visual patches and whole visual_input for batch index 0
-            # import cv2
-            # import numpy as np
-            # patch_debug = visual_patch[0].cpu().numpy().transpose(1, 2, 0)  # [H, W, 3]
-            # whole_debug = pixel_values[0].cpu().numpy().transpose(1, 2, 0)  # [H, W, 3]
-            # print(current_anchor[0].cpu().numpy())
-            # cv2.imwrite("debug_patch.png", (patch_debug * 255).astype(np.uint8))
-            # cv2.imwrite("debug_whole.png", (whole_debug * 255).astype(np.uint8))
-            # breakpoint()
-            #########
-            visual_patch = torch.stack(visual_patch, dim=0)  # [B, 3, H, W]
-            patch_outputs = self.vision_encoder(pixel_values=visual_patch)
-            patch_embeds = patch_outputs.last_hidden_state
-            patch_cls = patch_embeds[:, 0, :].unsqueeze(1)  # [B, 1, d_model]
-        projected_patch_embeds = self.image_proj(patch_cls)  # [B, 1, d_model]
-        patch_attention_mask = torch.ones(projected_patch_embeds.shape[:2], dtype=torch.long).to(projected_patch_embeds.device)    
-        # fused_inputs = torch.cat([projected_image_embeds, text_embeds, projected_anchor_embeds], dim=1) # [B, 257 + T + 1, d_model]
-        # fused_attention_mask = torch.cat([image_attention_mask, attention_mask, anchor_attention_mask], dim=1) # [B, 257 + T + 1]
-        
-        fused_inputs = torch.cat([projected_image_embeds, text_embeds, projected_patch_embeds, projected_anchor_embeds], dim=1) # [B, 257 + T + 1 + 1, d_model]
-        fused_attention_mask = torch.cat([image_attention_mask, attention_mask, patch_attention_mask, anchor_attention_mask], dim=1) # [B, 257 + T + 1 + 1]
+        if self.args.run_type not in ['baseline', 'ablation_1']:
+            patch_anchor = current_anchor
+            # cur_iteration = self.iteration if self.training else 1
+            # for _ in range(cur_iteration):
+            self.anchor_position_embeds = self.anchor_position_embeds.to(projected_image_embeds.device)
+            patch_anchor = (patch_anchor * 223).round().long().clamp(0, 223).to(projected_image_embeds.device)  # Convert to pixel coordinates in the range [0, 223], (B, 4)
+            patch_anchor = self.anchor_position_embeds[patch_anchor].to(projected_image_embeds.device)  # [B, 4, d_model]
+            projected_anchor_embeds = self.anchor_proj(patch_anchor)  # [B, 4, d_model]
+            anchor_attention_mask = torch.ones(projected_anchor_embeds.shape[:2], dtype=torch.long).to(projected_anchor_embeds.device)
+            
+            with torch.no_grad():
+                visual_patch = []
+                xy_patch = xywh_to_xyxy(current_anchor)  # Convert from xywh to xyxy
+                for bidx in range(projected_image_embeds.size(0)):
+                    patch_x1 = int(max(0., xy_patch[bidx, 0] * pixel_values.size(3)))
+                    patch_x2 = int(min(pixel_values.size(3), max(xy_patch[bidx, 2] * pixel_values.size(3),patch_x1+1)))
+                    patch_y1 = int(max(0., xy_patch[bidx, 1] * pixel_values.size(2)))
+                    patch_y2 = int(min(pixel_values.size(2), max(xy_patch[bidx, 3] * pixel_values.size(2),patch_y1+1)))
+                    patch_chunk = pixel_values[bidx, :,
+                        patch_y1:patch_y2, patch_x1:patch_x2]
+                    resized_patch = F.interpolate(
+                        patch_chunk.unsqueeze(0), size=(224, 224), mode='bilinear', align_corners=False
+                    )
+                    visual_patch.append(resized_patch.squeeze(0))
+
+                visual_patch = torch.stack(visual_patch, dim=0)  # [B, 3, H, W]
+                patch_outputs = self.vision_encoder(pixel_values=visual_patch)
+                patch_embeds = patch_outputs.last_hidden_state
+                patch_cls = patch_embeds[:, 0, :].unsqueeze(1)  # [B, 1, d_model]
+            projected_patch_embeds = self.image_proj(patch_cls)  # [B, 1, d_model]
+            patch_attention_mask = torch.ones(projected_patch_embeds.shape[:2], dtype=torch.long).to(projected_patch_embeds.device)    
+
+            fused_inputs = torch.cat([projected_image_embeds, text_embeds, projected_patch_embeds, projected_anchor_embeds], dim=1) # [B, 257 + T + 1 + 1, d_model]
+            fused_attention_mask = torch.cat([image_attention_mask, attention_mask, patch_attention_mask, anchor_attention_mask], dim=1) # [B, 257 + T + 1 + 1]
+        else:
+            fused_inputs = torch.cat([projected_image_embeds, text_embeds], dim=1)
+            fused_attention_mask = torch.cat([image_attention_mask, attention_mask], dim=1)
+
         encoder_outputs = self.language_model.encoder(
             inputs_embeds=fused_inputs,
             attention_mask=fused_attention_mask,
@@ -198,9 +195,16 @@ class CLIPT5Model(PreTrainedModel):
         if label_coords is not None:
             # regression_loss = F.l1_loss(pred_offsets, label_coords, reduction='sum') / B  # Mean Squared Error Loss
             # breakpoint()
-            xy_label_coords = xywh_to_xyxy(label_coords)  # Convert from xywh to xyxy
-            xy_pred = xywh_to_xyxy(pred_offsets+current_anchor)  # Convert from xywh to xyxy
-            regression_loss = self.loss_func(xy_pred, xy_label_coords) / B  # Logarithmic absolute loss
+            if self.args.run_type in ['baseline', 'ablation_1']:
+                # predict the xywh coordinates directly
+                xy_label_coords = xywh_to_xyxy(label_coords)  # Convert from xywh to xyxy
+                xy_pred = xywh_to_xyxy(pred_offsets)  # Convert from xywh to xyxy
+                regression_loss = self.loss_func(xy_pred, xy_label_coords) / B
+            else:
+                # predict the offsets from the current anchor
+                xy_label_coords = xywh_to_xyxy(label_coords)  # Convert from xywh to xyxy
+                xy_pred = xywh_to_xyxy(pred_offsets+current_anchor)  # Convert from xywh to xyxy
+                regression_loss = self.loss_func(xy_pred, xy_label_coords) / B  # Logarithmic absolute loss
             if ce_loss is not None:
                 total_loss = ce_loss + regression_loss
             else:

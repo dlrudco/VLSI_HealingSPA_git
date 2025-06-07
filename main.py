@@ -8,6 +8,8 @@ from clip_t5_modelling import CLIPT5Config, CLIPT5Model
 from dataset import HICODet, HICODetVLMDataset
 from safetensors.torch import load_file
 
+from functools import partial
+
 def _to_list_of_tensor(x, dtype=None, device=None):
     return [torch.as_tensor(item, dtype=dtype, device=device) for item in x]
 
@@ -60,7 +62,7 @@ def main(args):
         vision_model_name="openai/clip-vit-large-patch14",
         language_model_name="google/flan-t5-large"
     )
-    model = CLIPT5Model(config, tokenizer, apply_lora=True)
+    model = CLIPT5Model(config, tokenizer, apply_lora=True, args=args)
     if args.checkpoint:
         print(f"Loading model from checkpoint: {args.checkpoint}")
         state_dict = load_file(args.checkpoint, device="cpu")
@@ -71,10 +73,11 @@ def main(args):
 
     train_hicodet = HICODet(
                 root=os.path.join('hicodet', "hico_20160224_det/images", 'train2015'),
-                anno_file=os.path.join('hicodet', f"instances_train2015_curated_with_context.json"),
+                anno_file=os.path.join('hicodet', f"instances_train2015_merged.json"),
                 target_transform=ToTensor(input_format='dict')
             )
-    dataset = HICODetVLMDataset(train_hicodet, preprocess)
+    _preprocess = partial(preprocess, args=args)
+    dataset = HICODetVLMDataset(train_hicodet, _preprocess)
 
     training_args = TrainingArguments(
         output_dir=f"./checkpoints/{args.exp_name}",
@@ -119,6 +122,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train CLIP-T5 model on HICO-DET dataset")
     parser.add_argument("--checkpoint", type=str, default=None, help="Path to the model checkpoint")
     parser.add_argument("--exp_name", type=str, default="", help="Experiment name for logging")
+    parser.add_argument("--run_type", type=str, default="train", choices=["baseline", "ablation_1", "ablation_2", "ablation_3", "full"], help="Type of run to perform")
     args = parser.parse_args()
     if args.exp_name == "":
         args.exp_name = make_random_exp_name()

@@ -33,7 +33,7 @@ def get_union_box(box1, box2, size):
     y2 = max(box1[3], box2[3]) / size[1]
     return [x1, y1, x2, y2] 
 
-def preprocess(sample):
+def preprocess(sample, args=None):
     # random anchor version
     
     image, target = sample
@@ -46,8 +46,10 @@ def preprocess(sample):
     hoi = target["hoi"][idx]  
     box_h = target["boxes_h"][idx]  
     box_o = target["boxes_o"][idx]  
-    if "context-llava" in target:
-        context = target["context-llava"][idx]
+    if args.run_type in ['ablation_3', 'full']:
+        context = target['human_attrib'][idx] + " "
+        if args.run_type == 'full':
+            context += target["context-llava"][idx]
     else:
         context = ""
 
