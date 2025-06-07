@@ -72,8 +72,10 @@ class CLIPT5Model(PreTrainedModel):
         self.anchor_position_embeds = self.get_sinusoidal_positional_embedding(224, t5_d_model) # pixel level indicator.
 
         # self.offset_token_embeddings = nn.Embedding(4, t5_d_model)  # For the anchor token
-
-        self.regression_head = nn.Sequential(nn.Linear(t5_d_model, 1), nn.Tanh())  # Regression head for predicting offsets
+        if self.args.run_type in ['baseline', 'ablation_1']:
+            self.regression_head = nn.Sequential(nn.Linear(t5_d_model, 1), nn.Sigmoid())  # Regression head for predicting offsets
+        else:
+            self.regression_head = nn.Sequential(nn.Linear(t5_d_model, 1), nn.Tanh())  # Regression head for predicting offsets
         # self.loss_func = LogAbsLoss(reduction='sum')  # Logarithmic absolute loss for regression
         self.loss_func = nn.L1Loss(reduction='sum')
 
