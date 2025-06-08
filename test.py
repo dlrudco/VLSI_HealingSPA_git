@@ -26,7 +26,7 @@ def get_gt_union_box(box_h, box_o):
     return torch.tensor([x1, y1, x2, y2])
 
 @torch.no_grad()
-def evaluate_clip_t5(model, dataset, hico_prompts, tokenizer, clip_processor, device="cuda", iou_threshold=0.5):
+def evaluate_clip_t5(args, model, dataset, hico_prompts, tokenizer, clip_processor, device="cuda", iou_threshold=0.5):
     model.eval()
     model.to(device)
 
@@ -44,7 +44,22 @@ def evaluate_clip_t5(model, dataset, hico_prompts, tokenizer, clip_processor, de
         for hidx in tqdm(range(n_hois), leave=False, desc=f"Processing image {idx}"):
             hoi_idx = target["hoi"][hidx]
             text_prompt = f"Locate a person in {hico_prompts[hoi_idx]}"
-            anchor = torch.tensor([0.5, 0.5, 0.5, 0.5])  # fixed anchor
+            if args.run_type in ['ablation_3', 'full']:
+                try:
+                    context = target['human_attrib'][hidx] + " "
+                except IndexError:
+                    breakpoint()
+                if args.run_type == 'full':
+                    context += target["context-llava"][hidx]
+            else:
+                context = ""
+            if context != "":
+                text_prompt += f". To be specific, {context.lower()}"
+
+            if args.run_type in ['baseline', 'ablation_1']:
+                anchor = torch.zeros(4)
+            else:   
+                anchor = torch.tensor([0.5, 0.5, 0.5, 0.5])  # fixed anchor
 
             offset_acc = torch.zeros(4)
             anchor_now = anchor.clone()
@@ -65,7 +80,6 @@ def evaluate_clip_t5(model, dataset, hico_prompts, tokenizer, clip_processor, de
                 offset = outputs["regression_output"].squeeze(0).cpu()
                 offset_acc += offset
                 anchor_now += offset
-
             pred_box = offset_to_box(offset_acc, anchor, image_size).unsqueeze(0)
             gt_box = get_gt_union_box(target["boxes_h"][hidx], target["boxes_h"][hidx]).unsqueeze(0)
 
@@ -92,6 +106,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Inference script for CLIP-T5 model")
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to the model checkpoint")
+    parser.add_argument("--run_type", type=str, default="train", choices=["baseline", "ablation_1", "ablation_2", "ablation_3", "full"], help="Type of run to perform")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -105,7 +120,7 @@ if __name__ == "__main__":
         vision_model_name="openai/clip-vit-large-patch14",
         language_model_name="google/flan-t5-large"
     )
-    model = CLIPT5Model(config, tokenizer, apply_lora=True)
+    model = CLIPT5Model(config, tokenizer, apply_lora=True, args=args)
     checkpoint = load_file(args.checkpoint, device="cpu")
     model.load_state_dict(checkpoint, strict=False)
     model.to("cuda" if torch.cuda.is_available() else "cpu")
@@ -116,5 +131,9 @@ if __name__ == "__main__":
         anno_file="hicodet/instances_test2015_merged.json"
     )
 
-    avg_mse, accuracy = evaluate_clip_t5(model, test_dataset, hico_prompts, tokenizer, clip_processor, device=device)
+    avg_mse, accuracy = evaluate_clip_t5(args, model, test_dataset, hico_prompts, tokenizer, clip_processor, device=device)
     print(f"[Test] MSE: {avg_mse:.4f}, Accuracy (IoU > 0.5): {accuracy:.4f}")
+    with open(f'results_{args.run_type}.txt', 'w') as f:
+        f.write(f"[Test] MSE: {avg_mse:.4f}, Accuracy (IoU > 0.5): {accuracy:.4f}\n")
+        f.write(f"Run type: {args.run_type}\n")
+        f.write(f"Checkpoint: {args.checkpoint}\n")
