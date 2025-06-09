@@ -26,6 +26,14 @@ def xyxy_to_xywh(box):
     h = y2 - y1
     return [cx, cy, w, h]
 
+def xywh_to_xyxy(box):
+    cx, cy, w, h = box
+    x1 = cx - w / 2
+    y1 = cy - h / 2
+    x2 = cx + w / 2
+    y2 = cy + h / 2
+    return [x1, y1, x2, y2]
+
 def get_union_box(box1, box2, size):
     x1 = min(box1[0], box2[0]) / size[0]
     y1 = min(box1[1], box2[1]) / size[1]
@@ -62,22 +70,45 @@ def preprocess(sample, args=None):
     # new_anchor_xywh = anchor_xywh + delta * random_t
     # extra_label = (1 - random_t) * delta
     # # extra_label = union_xywh - 
-    anchor_xywh = torch.tensor([0.5, 0.5, 0.5, 0.5])
-    if random.random() < 0.2:
-        rand_xys = torch.rand(2) * 0.5 + 0.25  # [0.25, 0.75]
-        rand_whs = torch.rand(2) * 0.5 + 0.25  # [0.25, 0.75]
-        anchor_xywh[0] = rand_xys[0]  # cx
-        anchor_xywh[1] = rand_xys[1]  # cy
-        anchor_xywh[2] = rand_whs[0]  # w
-        anchor_xywh[3] = rand_whs[1]  # h
-    elif random.random() < 0.5:
+
+    ## version : before 0608
+    # anchor_xywh = torch.tensor([0.5, 0.5, 0.5, 0.5])
+    # if random.random() < 0.2:
+    #     rand_xys = torch.rand(2) * 0.5 + 0.25  # [0.25, 0.75]
+    #     rand_whs = torch.rand(2) * 0.5 + 0.25  # [0.25, 0.75]
+    #     anchor_xywh[0] = rand_xys[0]  # cx
+    #     anchor_xywh[1] = rand_xys[1]  # cy
+    #     anchor_xywh[2] = rand_whs[0]  # w
+    #     anchor_xywh[3] = rand_whs[1]  # h
+    # elif random.random() < 0.5:
+    #     # anchor near the label box
+    #     anchor_xywh[0] = union_xywh[0] + random.uniform(-0.1, 0.1) * union_xywh[2]  # cx
+    #     anchor_xywh[1] = union_xywh[1] + random.uniform(-0.1, 0.1) * union_xywh[3]  # cy
+    #     anchor_xywh[2] = union_xywh[2] * random.uniform(0.8, 1.2)  # w
+    #     anchor_xywh[3] = union_xywh[3] * random.uniform(0.8, 1.2)  # h
+    # else:
+    #     pass
+
+    # version : after 0608
+    anchor_xywh = torch.tensor([0.5, 0.5, 1.0, 1.0]) # full image anchor
+    if random.random() < 0.3:
         # anchor near the label box
         anchor_xywh[0] = union_xywh[0] + random.uniform(-0.1, 0.1) * union_xywh[2]  # cx
         anchor_xywh[1] = union_xywh[1] + random.uniform(-0.1, 0.1) * union_xywh[3]  # cy
         anchor_xywh[2] = union_xywh[2] * random.uniform(0.8, 1.2)  # w
-        anchor_xywh[3] = union_xywh[3] * random.uniform(0.8, 1.2)  # h
+        anchor_xywh[3] = union_xywh[3] * random.uniform(0.8, 1.2)  # h        
     else:
-        pass
+        ratio = random.random()
+        # linear interpolation between full image anchor and union box anchor
+        # interpolate in xyxy and then convert to xywh
+        anchor_xyxy = xywh_to_xyxy(anchor_xywh)
+        anchor_xyxy = [
+            anchor_xyxy[0] * (1 - ratio) + union_xyxy[0] * ratio,
+            anchor_xyxy[1] * (1 - ratio) + union_xyxy[1] * ratio,
+            anchor_xyxy[2] * (1 - ratio) + union_xyxy[2] * ratio,
+            anchor_xyxy[3] * (1 - ratio) + union_xyxy[3] * ratio
+        ]
+        anchor_xywh = torch.tensor(xyxy_to_xywh(anchor_xyxy))
 
     interaction_str = f"Locate a person in {hico_text_prompts[hoi.item()]}"
     output_str = "<answer>" # TODO : modify?

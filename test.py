@@ -59,7 +59,7 @@ def evaluate_clip_t5(args, model, dataset, hico_prompts, tokenizer, clip_process
             if args.run_type in ['baseline', 'ablation_1']:
                 anchor = torch.zeros(4)
             else:   
-                anchor = torch.tensor([0.5, 0.5, 0.5, 0.5])  # fixed anchor
+                anchor = torch.tensor([0.5, 0.5, 1.0, 1.0])  # fixed anchor
 
             offset_acc = torch.zeros(4)
             anchor_now = anchor.clone()
@@ -78,8 +78,8 @@ def evaluate_clip_t5(args, model, dataset, hico_prompts, tokenizer, clip_process
                     compute_additional_loss=True
                 )
                 offset = outputs["regression_output"].squeeze(0).cpu()
-                offset_acc += offset
-                anchor_now += offset
+                offset_acc += offset  
+                anchor_now += offset 
             pred_box = offset_to_box(offset_acc, anchor, image_size).unsqueeze(0)
             gt_box = get_gt_union_box(target["boxes_h"][hidx], target["boxes_h"][hidx]).unsqueeze(0)
 
@@ -133,7 +133,7 @@ if __name__ == "__main__":
 
     avg_mse, accuracy = evaluate_clip_t5(args, model, test_dataset, hico_prompts, tokenizer, clip_processor, device=device)
     print(f"[Test] MSE: {avg_mse:.4f}, Accuracy (IoU > 0.5): {accuracy:.4f}")
-    with open(f'results_{args.run_type}.txt', 'w') as f:
+    with open(f'results_{args.run_type}_iter3.txt', 'w') as f:
         f.write(f"[Test] MSE: {avg_mse:.4f}, Accuracy (IoU > 0.5): {accuracy:.4f}\n")
         f.write(f"Run type: {args.run_type}\n")
         f.write(f"Checkpoint: {args.checkpoint}\n")
